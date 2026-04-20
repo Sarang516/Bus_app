@@ -1,8 +1,8 @@
 """
 routers/drivers.py  –  ZHRT_DRIVER_MST CRUD
 """
-import sqlite3
 from datetime import date, datetime
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from db.database import get_db
 from schemas.schemas import DriverCreate, DriverUpdate
@@ -20,26 +20,26 @@ router = APIRouter(
 def list_drivers(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-    db: sqlite3.Connection = Depends(get_db),
+    db: Any = Depends(get_db),
 ):
     rows = db.execute(
-        "SELECT * FROM ZHRT_DRIVER_MST ORDER BY DRIVER_NAME LIMIT ? OFFSET ?",
+        "SELECT * FROM ZHRT_DRIVER_MST ORDER BY DRIVER_NAME LIMIT %s OFFSET %s",
         (limit, skip),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
 @router.get("/{driver_id}")
-def get_driver(driver_id: str, db: sqlite3.Connection = Depends(get_db)):
+def get_driver(driver_id: str, db: Any = Depends(get_db)):
     row = db.execute(
-        "SELECT * FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = ?", (driver_id,)
+        "SELECT * FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = %s", (driver_id,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Driver not found")
     return dict(row)
 
 
-def _next_driver_id(db: sqlite3.Connection) -> str:
+def _next_driver_id(db: Any) -> str:
     """Auto-generate next DRIVER_ID as DRV + serial number."""
     row = db.execute(
         "SELECT DRIVER_ID FROM ZHRT_DRIVER_MST ORDER BY DRIVER_ID DESC LIMIT 1"
@@ -59,11 +59,11 @@ def _next_driver_id(db: sqlite3.Connection) -> str:
 def create_driver(
     body: DriverCreate,
     created_by: str = "SYSTEM",
-    db: sqlite3.Connection = Depends(get_db)
+    db: Any = Depends(get_db)
 ):
     # Duplicate mobile check
     if db.execute(
-        "SELECT 1 FROM ZHRT_DRIVER_MST WHERE MOBILE_NO1 = ?", (body.mobile_no1,)
+        "SELECT 1 FROM ZHRT_DRIVER_MST WHERE MOBILE_NO1 = %s", (body.mobile_no1,)
     ).fetchone():
         raise HTTPException(
             status_code=400,
@@ -79,7 +79,7 @@ def create_driver(
 
     # Duplicate driver_id check
     if db.execute(
-        "SELECT 1 FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = ?", (driver_id,)
+        "SELECT 1 FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = %s", (driver_id,)
     ).fetchone():
         raise HTTPException(status_code=400, detail=f"Driver ID {driver_id} already exists.")
 
@@ -90,7 +90,7 @@ def create_driver(
         """INSERT INTO ZHRT_DRIVER_MST
            (DRIVER_ID, DRIVER_NAME, MOBILE_NO1, MOBILE_NO2, ADDRESS, DOB, DL_NO, VALID_UPTO,
             BEGDA, ENDDA, ZERNAM, ZERDAT, ZERZET)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (driver_id, body.driver_name, body.mobile_no1, body.mobile_no2,
          body.address, body.dob, body.dl_no, body.valid_upto,
          body.begda, body.endda, created_by, today, now)
@@ -104,10 +104,10 @@ def update_driver(
     driver_id: str,
     body: DriverUpdate,
     changed_by: str = "SYSTEM",
-    db: sqlite3.Connection = Depends(get_db)
+    db: Any = Depends(get_db)
 ):
     row = db.execute(
-        "SELECT 1 FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = ?", (driver_id,)
+        "SELECT 1 FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = %s", (driver_id,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -116,10 +116,10 @@ def update_driver(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    set_clause = ", ".join(f"{k.upper()} = ?" for k in updates)
+    set_clause = ", ".join(f"{k.upper()} = %s" for k in updates)
     values = list(updates.values()) + [datetime.now().isoformat(), changed_by, driver_id]
     db.execute(
-        f"UPDATE ZHRT_DRIVER_MST SET {set_clause}, ZAEDAT = ?, ZAENAM = ? WHERE DRIVER_ID = ?",
+        f"UPDATE ZHRT_DRIVER_MST SET {set_clause}, ZAEDAT = %s, ZAENAM = %s WHERE DRIVER_ID = %s",
         values
     )
     db.commit()
@@ -127,10 +127,10 @@ def update_driver(
 
 
 @router.delete("/{driver_id}")
-def delete_driver(driver_id: str, db: sqlite3.Connection = Depends(get_db)):
+def delete_driver(driver_id: str, db: Any = Depends(get_db)):
     # Check if driver is mapped to any active vehicle
     mapping = db.execute(
-        "SELECT 1 FROM ZHRT_DRI_VEH_MAP WHERE DRIVER_ID = ? AND ENDDA >= date('now')",
+        "SELECT 1 FROM ZHRT_DRI_VEH_MAP WHERE DRIVER_ID = %s AND ENDDA >= CURRENT_DATE",
         (driver_id,)
     ).fetchone()
     if mapping:
@@ -138,6 +138,6 @@ def delete_driver(driver_id: str, db: sqlite3.Connection = Depends(get_db)):
             status_code=400,
             detail="Cannot delete driver – active vehicle mapping exists. Remove mapping first."
         )
-    db.execute("DELETE FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = ?", (driver_id,))
+    db.execute("DELETE FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = %s", (driver_id,))
     db.commit()
     return {"message": "Driver deleted"}

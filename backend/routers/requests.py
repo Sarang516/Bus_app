@@ -1,9 +1,8 @@
 """
 routers/requests.py  –  ZHRT_BUS_REQ_MAIN full workflow
 """
-import sqlite3
 from datetime import datetime, date
-from typing import Optional
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from db.database import get_db
 from schemas.schemas import BusRequestCreate, BusRequestAction, AdminAllotRequest
@@ -51,7 +50,7 @@ def _log(db, reqid, seqnr, action_by, curr, new, pending,
             CURR_REQUEST_STATUS, NEW_REQUEST_STATUS, PENDING_WITH,
             REQUEST_TYPE, APPLICATION_TYPE, ROUTE_NO, PICK_UP_POINT,
             NEAREST_STATION, DIST_PICKUP_RESIDENCE, DIST_RESIDENCE_STATION, REMARKS)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (log_id, reqid, seqnr, action_by, datetime.now().isoformat(),
          curr, new, pending, req_type, app_type, route, pickup,
          station, d1, d2, remarks or "")
@@ -62,17 +61,17 @@ def _log(db, reqid, seqnr, action_by, curr, new, pending,
 # CREATE
 # ─────────────────────────────────────────────────────────────────────────────
 @router.post("/", status_code=201)
-def create_request(body: BusRequestCreate, db: sqlite3.Connection = Depends(get_db)):
+def create_request(body: BusRequestCreate, db: Any = Depends(get_db)):
     # Employee must exist
     emp = db.execute(
-        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = ?", (body.pernr,)
+        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = %s", (body.pernr,)
     ).fetchone()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
 
     # Route must exist
     route_row = db.execute(
-        "SELECT 1 FROM ZHRT_ROUTE_MAP WHERE SEQNR = ? AND PICK_UP_POINT = ?",
+        "SELECT 1 FROM ZHRT_ROUTE_MAP WHERE SEQNR = %s AND PICK_UP_POINT = %s",
         (body.route_no, body.pick_up_point)
     ).fetchone()
     if not route_row:
@@ -98,7 +97,7 @@ def create_request(body: BusRequestCreate, db: sqlite3.Connection = Depends(get_
             DIST_PICKUP_RESIDENCE, DIST_RESIDENCE_STATION,
             EFFECTIVE_DATE, ATTACHMENT, STATUS, PENDING_WITH,
             REQUEST_CREATED_BY, REQUEST_CREATION_DATE, CHANGED_ON, CHANGED_BY)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (reqid, body.pernr, body.pass_type, body.application_type, body.reason,
          body.route_no, body.pick_up_point, body.nearest_station,
          body.dist_pickup_residence, body.dist_residence_station,
@@ -130,7 +129,7 @@ def list_requests(
     status_filter: Optional[str] = Query(None),
     skip:  int = Query(0,   ge=0),
     limit: int = Query(100, ge=1, le=500),
-    db: sqlite3.Connection = Depends(get_db),
+    db: Any = Depends(get_db),
 ):
     base = """
         SELECT r.*,
@@ -147,14 +146,14 @@ def list_requests(
     elif role == "TRANSPORT_ADMIN":
         where, params = "WHERE r.STATUS IN ('0003','0005','0006')", []
     else:
-        where, params = "WHERE (r.PERNR = ? OR r.REQUEST_CREATED_BY = ?)", [pernr, pernr]
+        where, params = "WHERE (r.PERNR = %s OR r.REQUEST_CREATED_BY = %s)", [pernr, pernr]
 
     if status_filter:
         connector = "AND" if where else "WHERE"
-        where  += f" {connector} r.STATUS = ?"
+        where  += f" {connector} r.STATUS = %s"
         params.append(status_filter)
 
-    sql  = base + where + " ORDER BY r.REQUEST_CREATION_DATE DESC LIMIT ? OFFSET ?"
+    sql  = base + where + " ORDER BY r.REQUEST_CREATION_DATE DESC LIMIT %s OFFSET %s"
     rows = db.execute(sql, params + [limit, skip]).fetchall()
 
     result = []
@@ -169,9 +168,9 @@ def list_requests(
 # UPDATE DRAFT
 # ─────────────────────────────────────────────────────────────────────────────
 @router.put("/{reqid}")
-def update_draft(reqid: str, body: BusRequestCreate, db: sqlite3.Connection = Depends(get_db)):
+def update_draft(reqid: str, body: BusRequestCreate, db: Any = Depends(get_db)):
     req = db.execute(
-        "SELECT STATUS FROM ZHRT_BUS_REQ_MAIN WHERE REQID = ?", (reqid,)
+        "SELECT STATUS FROM ZHRT_BUS_REQ_MAIN WHERE REQID = %s", (reqid,)
     ).fetchone()
     if not req:
         raise HTTPException(status_code=404, detail="Request not found.")
@@ -180,7 +179,7 @@ def update_draft(reqid: str, body: BusRequestCreate, db: sqlite3.Connection = De
 
     # Validate route/pickup still exist
     if not db.execute(
-        "SELECT 1 FROM ZHRT_ROUTE_MAP WHERE SEQNR = ? AND PICK_UP_POINT = ?",
+        "SELECT 1 FROM ZHRT_ROUTE_MAP WHERE SEQNR = %s AND PICK_UP_POINT = %s",
         (body.route_no, body.pick_up_point)
     ).fetchone():
         raise HTTPException(status_code=400, detail="Selected route / pick-up point is invalid.")
@@ -188,11 +187,11 @@ def update_draft(reqid: str, body: BusRequestCreate, db: sqlite3.Connection = De
     now = datetime.now().isoformat()
     db.execute(
         """UPDATE ZHRT_BUS_REQ_MAIN SET
-               PASS_TYPE=?, APPLICATION_TYPE=?, REASON=?,
-               ROUTE_NO=?, PICK_UP_POINT=?, NEAREST_STATION=?,
-               DIST_PICKUP_RESIDENCE=?, DIST_RESIDENCE_STATION=?,
-               EFFECTIVE_DATE=?, ATTACHMENT=?, CHANGED_ON=?, CHANGED_BY=?
-           WHERE REQID=?""",
+               PASS_TYPE=%s, APPLICATION_TYPE=%s, REASON=%s,
+               ROUTE_NO=%s, PICK_UP_POINT=%s, NEAREST_STATION=%s,
+               DIST_PICKUP_RESIDENCE=%s, DIST_RESIDENCE_STATION=%s,
+               EFFECTIVE_DATE=%s, ATTACHMENT=%s, CHANGED_ON=%s, CHANGED_BY=%s
+           WHERE REQID=%s""",
         (body.pass_type, body.application_type, body.reason,
          body.route_no, body.pick_up_point, body.nearest_station,
          body.dist_pickup_residence, body.dist_residence_station,
@@ -206,9 +205,9 @@ def update_draft(reqid: str, body: BusRequestCreate, db: sqlite3.Connection = De
 # GET SINGLE
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get("/{reqid}")
-def get_request(reqid: str, db: sqlite3.Connection = Depends(get_db)):
+def get_request(reqid: str, db: Any = Depends(get_db)):
     row = db.execute(
-        "SELECT * FROM ZHRT_BUS_REQ_MAIN WHERE REQID = ?", (reqid,)
+        "SELECT * FROM ZHRT_BUS_REQ_MAIN WHERE REQID = %s", (reqid,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Request not found")
@@ -218,34 +217,34 @@ def get_request(reqid: str, db: sqlite3.Connection = Depends(get_db)):
 
     emp = db.execute(
         "SELECT PERNR, ENAME, DESIGNATION, DEPARTMENT, STRAS "
-        "FROM ZEMP_MASTER_TABLE WHERE PERNR = ?", (d["PERNR"],)
+        "FROM ZEMP_MASTER_TABLE WHERE PERNR = %s", (d["PERNR"],)
     ).fetchone()
     d["EMPLOYEE"] = dict(emp) if emp else {}
 
     # Resolve route description
     route_row = db.execute(
-        "SELECT DISTINCT ROUTE_FROM FROM ZHRT_ROUTE_MAP WHERE SEQNR = ?", (d["ROUTE_NO"],)
+        "SELECT DISTINCT ROUTE_FROM FROM ZHRT_ROUTE_MAP WHERE SEQNR = %s", (d["ROUTE_NO"],)
     ).fetchone()
     d["ROUTE_FROM"] = route_row["ROUTE_FROM"] if route_row else None
 
     # Resolve PENDING_WITH PERNR → name
     if d.get("PENDING_WITH"):
         pw = db.execute(
-            "SELECT ENAME FROM ZEMP_MASTER_TABLE WHERE PERNR = ?", (d["PENDING_WITH"],)
+            "SELECT ENAME FROM ZEMP_MASTER_TABLE WHERE PERNR = %s", (d["PENDING_WITH"],)
         ).fetchone()
         d["PENDING_WITH_NAME"] = pw["ENAME"] if pw else d["PENDING_WITH"]
 
     # Vehicle & Driver info if allotted
     if d.get("ALLOTTED_VEHICLE_NO"):
         veh = db.execute(
-            "SELECT VEHICLE_NO, VEHICLE_TYPE, MAKE, MODEL FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = ?",
+            "SELECT VEHICLE_NO, VEHICLE_TYPE, MAKE, MODEL FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = %s",
             (d["ALLOTTED_VEHICLE_NO"],)
         ).fetchone()
         d["VEHICLE_INFO"] = dict(veh) if veh else {}
 
     if d.get("ALLOTTED_DRIVER_ID"):
         drv = db.execute(
-            "SELECT DRIVER_ID, DRIVER_NAME, MOBILE_NO1 FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = ?",
+            "SELECT DRIVER_ID, DRIVER_NAME, MOBILE_NO1 FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = %s",
             (d["ALLOTTED_DRIVER_ID"],)
         ).fetchone()
         d["DRIVER_INFO"] = dict(drv) if drv else {}
@@ -254,7 +253,7 @@ def get_request(reqid: str, db: sqlite3.Connection = Depends(get_db)):
         """SELECT l.*, COALESCE(e.ENAME, l.ACTION_BY) AS ACTION_BY_NAME
            FROM ZHRT_BUS_REQ_LOGS l
            LEFT JOIN ZEMP_MASTER_TABLE e ON l.ACTION_BY = e.PERNR
-           WHERE l.REQID = ? ORDER BY l.SEQNR""",
+           WHERE l.REQID = %s ORDER BY l.SEQNR""",
         (reqid,)
     ).fetchall()
     d["LOGS"] = [dict(l) for l in logs]
@@ -269,10 +268,10 @@ def get_request(reqid: str, db: sqlite3.Connection = Depends(get_db)):
 def take_action(
     reqid: str,
     body: BusRequestAction,
-    db: sqlite3.Connection = Depends(get_db)
+    db: Any = Depends(get_db)
 ):
     req = db.execute(
-        "SELECT * FROM ZHRT_BUS_REQ_MAIN WHERE REQID = ?", (reqid,)
+        "SELECT * FROM ZHRT_BUS_REQ_MAIN WHERE REQID = %s", (reqid,)
     ).fetchone()
     if not req:
         raise HTTPException(status_code=404, detail="Request not found")
@@ -312,12 +311,12 @@ def take_action(
             )
         # Validate vehicle & driver exist
         if not db.execute(
-            "SELECT 1 FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = ? AND ACTIVE_FLAG = 'Y'",
+            "SELECT 1 FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = %s AND ACTIVE_FLAG = 'Y'",
             (body.vehicle_no,)
         ).fetchone():
             raise HTTPException(status_code=400, detail="Vehicle not found or inactive.")
         if not db.execute(
-            "SELECT 1 FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = ?", (body.driver_id,)
+            "SELECT 1 FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = %s", (body.driver_id,)
         ).fetchone():
             raise HTTPException(status_code=400, detail="Driver not found.")
         pending_with = None
@@ -330,15 +329,15 @@ def take_action(
 
     db.execute(
         """UPDATE ZHRT_BUS_REQ_MAIN
-           SET STATUS = ?, PENDING_WITH = ?, CHANGED_ON = ?, CHANGED_BY = ?,
-               ALLOTTED_VEHICLE_NO = ?, ALLOTTED_DRIVER_ID = ?, REMARKS = ?
-           WHERE REQID = ?""",
+           SET STATUS = %s, PENDING_WITH = %s, CHANGED_ON = %s, CHANGED_BY = %s,
+               ALLOTTED_VEHICLE_NO = %s, ALLOTTED_DRIVER_ID = %s, REMARKS = %s
+           WHERE REQID = %s""",
         (new_status, pending_with, now, body.action_by,
          vehicle_no, driver_id, body.remarks, reqid)
     )
 
     seqnr = db.execute(
-        "SELECT COUNT(*) FROM ZHRT_BUS_REQ_LOGS WHERE REQID = ?", (reqid,)
+        "SELECT COUNT(*) FROM ZHRT_BUS_REQ_LOGS WHERE REQID = %s", (reqid,)
     ).fetchone()[0] + 1
 
     _log(db, reqid, seqnr, body.action_by, curr, new_status, pending_with,
@@ -362,23 +361,23 @@ def take_action(
 def admin_direct_allot(
     body: AdminAllotRequest,
     allotted_by: str = "SYSTEM",
-    db: sqlite3.Connection = Depends(get_db)
+    db: Any = Depends(get_db)
 ):
     emp = db.execute(
-        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = ?", (body.pernr,)
+        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = %s", (body.pernr,)
     ).fetchone()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found.")
 
     vehicle = db.execute(
-        "SELECT * FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = ? AND ACTIVE_FLAG = 'Y'",
+        "SELECT * FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = %s AND ACTIVE_FLAG = 'Y'",
         (body.vehicle_no,)
     ).fetchone()
     if not vehicle:
         raise HTTPException(status_code=400, detail="Vehicle not found or inactive.")
 
     driver = db.execute(
-        "SELECT * FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = ?", (body.driver_id,)
+        "SELECT * FROM ZHRT_DRIVER_MST WHERE DRIVER_ID = %s", (body.driver_id,)
     ).fetchone()
     if not driver:
         raise HTTPException(status_code=400, detail="Driver not found.")
@@ -395,7 +394,7 @@ def admin_direct_allot(
             EFFECTIVE_DATE, STATUS, PENDING_WITH,
             REQUEST_CREATED_BY, REQUEST_CREATION_DATE, CHANGED_ON, CHANGED_BY,
             ALLOTTED_VEHICLE_NO, ALLOTTED_DRIVER_ID, REMARKS)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (reqid, body.pernr, "STAFF", "DIRECT", "Admin Direct Allotment",
          "00", "Direct Assignment", "N/A", 0, 0,
          today, "0005", None,
@@ -421,9 +420,9 @@ def admin_direct_allot(
 # GET LOGS
 # ─────────────────────────────────────────────────────────────────────────────
 @router.get("/{reqid}/logs")
-def get_logs(reqid: str, db: sqlite3.Connection = Depends(get_db)):
+def get_logs(reqid: str, db: Any = Depends(get_db)):
     rows = db.execute(
-        "SELECT * FROM ZHRT_BUS_REQ_LOGS WHERE REQID = ? ORDER BY SEQNR",
+        "SELECT * FROM ZHRT_BUS_REQ_LOGS WHERE REQID = %s ORDER BY SEQNR",
         (reqid,)
     ).fetchall()
     result = []

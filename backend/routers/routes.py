@@ -1,7 +1,7 @@
 """
 routers/routes.py  –  ZHRT_ROUTE_MAP read endpoints
 """
-import sqlite3
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from db.database import get_db
 
@@ -15,12 +15,12 @@ router = APIRouter(
 
 
 @router.get("/")
-def list_routes(db: sqlite3.Connection = Depends(get_db)):
+def list_routes(db: Any = Depends(get_db)):
     """Return distinct routes (SEQNR + ROUTE_FROM)."""
     rows = db.execute(
         """SELECT SEQNR, ROUTE_FROM
            FROM ZHRT_ROUTE_MAP
-           WHERE ENDDA >= date('now')
+           WHERE ENDDA >= CURRENT_DATE
            GROUP BY SEQNR, ROUTE_FROM
            ORDER BY SEQNR"""
     ).fetchall()
@@ -28,12 +28,12 @@ def list_routes(db: sqlite3.Connection = Depends(get_db)):
 
 
 @router.get("/{seqnr}/pickups")
-def list_pickups(seqnr: str, db: sqlite3.Connection = Depends(get_db)):
+def list_pickups(seqnr: str, db: Any = Depends(get_db)):
     """Return all pick-up points for a given route."""
     rows = db.execute(
         """SELECT SUB_SEQNR, PICK_UP_POINT
            FROM ZHRT_ROUTE_MAP
-           WHERE SEQNR = ? AND ENDDA >= date('now')
+           WHERE SEQNR = %s AND ENDDA >= CURRENT_DATE
            ORDER BY SUB_SEQNR""",
         (seqnr,)
     ).fetchall()

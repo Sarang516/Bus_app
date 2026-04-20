@@ -1,9 +1,8 @@
 """
 routers/employees.py  –  ZEMP_MASTER_TABLE READ + profile update operations
 """
-import sqlite3
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from db.database import get_db
 from schemas.schemas import EmployeeProfileUpdate
@@ -21,24 +20,24 @@ def list_employees(
     skip: int = 0,
     limit: int = 100,
     search: Optional[str] = None,
-    db: sqlite3.Connection = Depends(get_db),
+    db: Any = Depends(get_db),
 ):
     """List employees with optional search and pagination."""
     if search:
         rows = db.execute(
-            "SELECT * FROM ZEMP_MASTER_TABLE WHERE ENAME LIKE ? OR PERNR LIKE ? ORDER BY ENAME LIMIT ? OFFSET ?",
+            "SELECT * FROM ZEMP_MASTER_TABLE WHERE ENAME LIKE %s OR PERNR LIKE %s ORDER BY ENAME LIMIT %s OFFSET %s",
             (f"%{search}%", f"%{search}%", limit, skip),
         ).fetchall()
     else:
         rows = db.execute(
-            "SELECT * FROM ZEMP_MASTER_TABLE ORDER BY ENAME LIMIT ? OFFSET ?",
+            "SELECT * FROM ZEMP_MASTER_TABLE ORDER BY ENAME LIMIT %s OFFSET %s",
             (limit, skip),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
 @router.get("/with-allotment")
-def list_employees_with_allotment(db: sqlite3.Connection = Depends(get_db)):
+def list_employees_with_allotment(db: Any = Depends(get_db)):
     """All employees with their latest allotted vehicle & driver (status 0005)."""
     rows = db.execute("""
         SELECT
@@ -63,10 +62,10 @@ def list_employees_with_allotment(db: sqlite3.Connection = Depends(get_db)):
 
 
 @router.get("/{pernr}")
-def get_employee(pernr: str, db: sqlite3.Connection = Depends(get_db)):
+def get_employee(pernr: str, db: Any = Depends(get_db)):
     """Get a single employee by PERNR."""
     row = db.execute(
-        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = ?", (pernr,)
+        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = %s", (pernr,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -77,11 +76,11 @@ def get_employee(pernr: str, db: sqlite3.Connection = Depends(get_db)):
 def update_employee_profile(
     pernr: str,
     body: EmployeeProfileUpdate,
-    db: sqlite3.Connection = Depends(get_db)
+    db: Any = Depends(get_db)
 ):
     """Employee updates their own profile details and optionally changes password."""
     row = db.execute(
-        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = ?", (pernr,)
+        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = %s", (pernr,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -115,16 +114,16 @@ def update_employee_profile(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update.")
 
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    set_clause = ", ".join(f"{k} = %s" for k in updates)
     values = list(updates.values()) + [datetime.now().isoformat(), pernr]
     db.execute(
-        f"UPDATE ZEMP_MASTER_TABLE SET {set_clause}, ZAEDAT = ? WHERE PERNR = ?",
+        f"UPDATE ZEMP_MASTER_TABLE SET {set_clause}, ZAEDAT = %s WHERE PERNR = %s",
         values
     )
     db.commit()
 
     updated = db.execute(
-        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = ?", (pernr,)
+        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = %s", (pernr,)
     ).fetchone()
     return {
         "message": "Profile updated successfully",

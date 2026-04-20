@@ -1,8 +1,8 @@
 """
 routers/vehicles.py  –  ZHRT_VEHICLE_MST CRUD
 """
-import sqlite3
 from datetime import date, datetime
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from db.database import get_db
 from schemas.schemas import VehicleCreate, VehicleUpdate
@@ -23,7 +23,7 @@ def list_vehicles(
     active_only: bool = True,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-    db: sqlite3.Connection = Depends(get_db),
+    db: Any = Depends(get_db),
 ):
     where = "WHERE v.ACTIVE_FLAG = 'Y'" if active_only else ""
     sql = f"""
@@ -40,15 +40,15 @@ def list_vehicles(
         ) uc ON v.VEHICLE_NO = uc.ALLOTTED_VEHICLE_NO
         {where}
         ORDER BY v.VEHICLE_NO
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
     """
     return [dict(r) for r in db.execute(sql, (limit, skip)).fetchall()]
 
 
 @router.get("/{vehicle_no}")
-def get_vehicle(vehicle_no: str, db: sqlite3.Connection = Depends(get_db)):
+def get_vehicle(vehicle_no: str, db: Any = Depends(get_db)):
     row = db.execute(
-        "SELECT * FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = ?", (vehicle_no,)
+        "SELECT * FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = %s", (vehicle_no,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Vehicle not found")
@@ -59,10 +59,10 @@ def get_vehicle(vehicle_no: str, db: sqlite3.Connection = Depends(get_db)):
 def create_vehicle(
     body: VehicleCreate,
     created_by: str = "SYSTEM",
-    db: sqlite3.Connection = Depends(get_db)
+    db: Any = Depends(get_db)
 ):
     if db.execute(
-        "SELECT 1 FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = ?", (body.vehicle_no,)
+        "SELECT 1 FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = %s", (body.vehicle_no,)
     ).fetchone():
         raise HTTPException(status_code=400, detail="Vehicle number already exists.")
 
@@ -89,7 +89,7 @@ def create_vehicle(
             TAX_VALID_UPTO, INS_VALID_UPTO, FITNESS_VALID_UPTO, PERMIT_VALID_UPTO,
             VEHICLE_FROM_DATE, VEHICLE_TO_DATE, ACTIVE_FLAG, SEATING_CAPACITY,
             ZERNAM, ZERDAT, ZERZET)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (body.vehicle_no, body.vehicle_type, body.vehicle_category, body.make, body.model,
          body.chassis_no, body.engine_no, body.year_regn, body.date_purchase,
          body.po_number, body.cost_purchase, body.agency_name,
@@ -107,10 +107,10 @@ def update_vehicle(
     vehicle_no: str,
     body: VehicleUpdate,
     changed_by: str = "SYSTEM",
-    db: sqlite3.Connection = Depends(get_db)
+    db: Any = Depends(get_db)
 ):
     row = db.execute(
-        "SELECT 1 FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = ?", (vehicle_no,)
+        "SELECT 1 FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = %s", (vehicle_no,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Vehicle not found")
@@ -119,10 +119,10 @@ def update_vehicle(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    set_clause = ", ".join(f"{k.upper()} = ?" for k in updates)
+    set_clause = ", ".join(f"{k.upper()} = %s" for k in updates)
     values = list(updates.values()) + [datetime.now().isoformat(), changed_by, vehicle_no]
     db.execute(
-        f"UPDATE ZHRT_VEHICLE_MST SET {set_clause}, ZAEDAT = ?, ZAENAM = ? WHERE VEHICLE_NO = ?",
+        f"UPDATE ZHRT_VEHICLE_MST SET {set_clause}, ZAEDAT = %s, ZAENAM = %s WHERE VEHICLE_NO = %s",
         values
     )
     db.commit()
@@ -130,15 +130,15 @@ def update_vehicle(
 
 
 @router.delete("/{vehicle_no}")
-def deactivate_vehicle(vehicle_no: str, changed_by: str = "SYSTEM", db: sqlite3.Connection = Depends(get_db)):
+def deactivate_vehicle(vehicle_no: str, changed_by: str = "SYSTEM", db: Any = Depends(get_db)):
     """Soft-delete: set ACTIVE_FLAG = 'N'."""
     row = db.execute(
-        "SELECT 1 FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = ?", (vehicle_no,)
+        "SELECT 1 FROM ZHRT_VEHICLE_MST WHERE VEHICLE_NO = %s", (vehicle_no,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Vehicle not found")
     db.execute(
-        "UPDATE ZHRT_VEHICLE_MST SET ACTIVE_FLAG = 'N', ZAENAM = ?, ZAEDAT = ? WHERE VEHICLE_NO = ?",
+        "UPDATE ZHRT_VEHICLE_MST SET ACTIVE_FLAG = 'N', ZAENAM = %s, ZAEDAT = %s WHERE VEHICLE_NO = %s",
         (changed_by, datetime.now().isoformat(), vehicle_no)
     )
     db.commit()

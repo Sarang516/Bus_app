@@ -2,8 +2,8 @@
 routers/auth.py  –  Login, Self-Register, Admin add employee
 """
 import logging
-import sqlite3
 from datetime import date
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from db.database import get_db
 from schemas.schemas import LoginRequest, LoginOut, RegisterRequest, AdminAddEmployee, UserOut
@@ -33,7 +33,7 @@ def _validate_password(password: str):
         )
 
 
-def _next_pernr(db: sqlite3.Connection) -> str:
+def _next_pernr(db: Any) -> str:
     row = db.execute(
         "SELECT MAX(CAST(PERNR AS INTEGER)) FROM ZEMP_MASTER_TABLE"
     ).fetchone()
@@ -41,7 +41,7 @@ def _next_pernr(db: sqlite3.Connection) -> str:
     return str(next_num)
 
 
-def _build_login_response(row: sqlite3.Row, token: str) -> LoginOut:
+def _build_login_response(row: Any, token: str) -> LoginOut:
     return LoginOut(
         access_token=token,
         token_type="bearer",
@@ -60,9 +60,9 @@ def _build_login_response(row: sqlite3.Row, token: str) -> LoginOut:
 # ── Login (rate-limited: 5 attempts / minute per IP) ─────────────────────────
 @router.post("/login", response_model=LoginOut)
 @limiter.limit("5/minute")
-def login(request: Request, payload: LoginRequest, db: sqlite3.Connection = Depends(get_db)):
+def login(request: Request, payload: LoginRequest, db: Any = Depends(get_db)):
     row = db.execute(
-        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = ?", (payload.pernr,)
+        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = %s", (payload.pernr,)
     ).fetchone()
 
     if not row:
@@ -91,7 +91,7 @@ def login(request: Request, payload: LoginRequest, db: sqlite3.Connection = Depe
 
 # ── Self-Register ─────────────────────────────────────────────────────────────
 @router.post("/register", status_code=201)
-def register(payload: RegisterRequest, db: sqlite3.Connection = Depends(get_db)):
+def register(payload: RegisterRequest, db: Any = Depends(get_db)):
     _validate_password(payload.password)
     today = date.today().isoformat()
     pernr = _next_pernr(db)
@@ -99,7 +99,7 @@ def register(payload: RegisterRequest, db: sqlite3.Connection = Depends(get_db))
     db.execute(
         "INSERT INTO ZEMP_MASTER_TABLE "
         "(PERNR, ENAME, DESIGNATION, DEPARTMENT, STRAS, ROLE, PASSWORD, EMAIL, MOBILE_NO, PROFILE_PHOTO, ZERDAT) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (pernr, payload.ename, payload.designation, payload.department,
          payload.address, "EMPLOYEE", hash_password(payload.password),
          payload.email, payload.mobile_no, payload.profile_photo, today)
@@ -132,7 +132,7 @@ def register(payload: RegisterRequest, db: sqlite3.Connection = Depends(get_db))
 @router.post("/admin/add-employee", status_code=201)
 def admin_add_employee(
     payload: AdminAddEmployee,
-    db: sqlite3.Connection = Depends(get_db),
+    db: Any = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     if current_user.get("role") != "TRANSPORT_ADMIN":
@@ -151,7 +151,7 @@ def admin_add_employee(
     db.execute(
         "INSERT INTO ZEMP_MASTER_TABLE "
         "(PERNR, ENAME, DESIGNATION, DEPARTMENT, STRAS, ROLE, PASSWORD, EMAIL, MOBILE_NO, ZERDAT) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
         (pernr, payload.ename, payload.designation, payload.department,
          payload.address, payload.role, hash_password(payload.password),
          payload.email, payload.mobile_no, today)
@@ -165,14 +165,14 @@ def admin_add_employee(
 @router.get("/employee/{pernr}", response_model=UserOut)
 def get_employee_profile(
     pernr: str,
-    db: sqlite3.Connection = Depends(get_db),
+    db: Any = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
     if current_user.get("role") == "EMPLOYEE" and current_user.get("sub") != pernr:
         raise HTTPException(status_code=403, detail="You can only view your own profile.")
 
     row = db.execute(
-        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = ?", (pernr,)
+        "SELECT * FROM ZEMP_MASTER_TABLE WHERE PERNR = %s", (pernr,)
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Employee not found")

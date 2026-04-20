@@ -1,247 +1,318 @@
 """
-database.py  –  SQLite connection + table creation + seed data
+db/database.py  –  PostgreSQL connection + table creation + seed data
 """
-import sqlite3
+import os
+import logging
 from datetime import date, datetime
-from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent / "bus_app.db"
+import psycopg2
+import psycopg2.extras
+import psycopg2.extensions
+
+logger = logging.getLogger(__name__)
+
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    "postgresql://postgres:postgres@localhost:5432/bus_app"
+)
 
 
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+# ─────────────────────────────────────────────────────────────────────────────
+# Row wrapper — supports both row["KEY"] and row[0] access
+# ─────────────────────────────────────────────────────────────────────────────
+class PgRow(dict):
+    """Dict subclass that also supports integer index access like sqlite3.Row."""
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        # PostgreSQL returns lowercase keys; try both cases
+        try:
+            return super().__getitem__(key)
+        except KeyError:
+            return super().__getitem__(key.lower())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cursor wrapper — converts RealDictRow → PgRow on fetch
+# ─────────────────────────────────────────────────────────────────────────────
+class PgCursor:
+    def __init__(self, cursor):
+        self._cur = cursor
+
+    def fetchone(self):
+        row = self._cur.fetchone()
+        return PgRow(row) if row else None
+
+    def fetchall(self):
+        return [PgRow(r) for r in self._cur.fetchall()]
+
+    def __iter__(self):
+        return (PgRow(r) for r in self._cur)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Connection wrapper — mimics sqlite3.Connection interface
+# ─────────────────────────────────────────────────────────────────────────────
+class PgConnection:
+    """
+    Wraps a psycopg2 connection to expose the same interface as sqlite3.Connection
+    so all routers work without changes beyond ? → %s and date('now') → CURRENT_DATE.
+    """
+    def __init__(self, conn: psycopg2.extensions.connection):
+        self._conn = conn
+
+    def execute(self, sql: str, params=()) -> PgCursor:
+        cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params if params else None)
+        return PgCursor(cur)
+
+    def executemany(self, sql: str, data) -> None:
+        cur = self._conn.cursor()
+        psycopg2.extras.execute_batch(cur, sql, data)
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Connection factory
+# ─────────────────────────────────────────────────────────────────────────────
+def get_connection() -> PgConnection:
+    conn = psycopg2.connect(DATABASE_URL)
+    return PgConnection(conn)
 
 
 def get_db():
-    """FastAPI dependency – yields a connection and closes it after the request."""
+    """FastAPI dependency — yields a connection and closes it after the request."""
     conn = get_connection()
     try:
         yield conn
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DDL
+# DDL  (PostgreSQL syntax)
 # ─────────────────────────────────────────────────────────────────────────────
-DDL = """
--- ── Employee Master ──────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS ZEMP_MASTER_TABLE (
-    PERNR       TEXT PRIMARY KEY,
-    ENAME       TEXT NOT NULL,
-    DESIGNATION TEXT,
-    DEPARTMENT  TEXT,
-    WERKS       TEXT,
-    PERSG       TEXT,
-    PERSK       TEXT,
-    ORGEH       TEXT,
-    STRAS       TEXT,
-    ROLE        TEXT NOT NULL DEFAULT 'EMPLOYEE',  -- EMPLOYEE | APPROVER | TRANSPORT_ADMIN
-    PASSWORD    TEXT NOT NULL DEFAULT 'pass123',
-    EMAIL       TEXT,
-    MOBILE_NO   TEXT,
-    PROFILE_PHOTO TEXT,
-    ZERNAM      TEXT,
-    ZERDAT      TEXT,
-    ZAENAM      TEXT,
-    ZAEDAT      TEXT
-);
+DDL_STATEMENTS = [
+    # Employee Master
+    """CREATE TABLE IF NOT EXISTS ZEMP_MASTER_TABLE (
+        PERNR         TEXT PRIMARY KEY,
+        ENAME         TEXT NOT NULL,
+        DESIGNATION   TEXT,
+        DEPARTMENT    TEXT,
+        WERKS         TEXT,
+        PERSG         TEXT,
+        PERSK         TEXT,
+        ORGEH         TEXT,
+        STRAS         TEXT,
+        ROLE          TEXT NOT NULL DEFAULT 'EMPLOYEE',
+        PASSWORD      TEXT NOT NULL DEFAULT 'pass123',
+        EMAIL         TEXT,
+        MOBILE_NO     TEXT,
+        PROFILE_PHOTO TEXT,
+        ZERNAM        TEXT,
+        ZERDAT        TEXT,
+        ZAENAM        TEXT,
+        ZAEDAT        TEXT
+    )""",
 
--- ── Driver Master (ZHRT_DRIVER_MST) ──────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS ZHRT_DRIVER_MST (
-    DRIVER_ID   TEXT PRIMARY KEY,
-    DRIVER_NAME TEXT NOT NULL,
-    MOBILE_NO1  TEXT NOT NULL UNIQUE,
-    MOBILE_NO2  TEXT,
-    ADDRESS     TEXT,
-    DOB         TEXT,
-    DL_NO       TEXT,
-    VALID_UPTO  TEXT,
-    BEGDA       TEXT NOT NULL,
-    ENDDA       TEXT NOT NULL DEFAULT '9999-12-31',
-    ZERNAM      TEXT,
-    ZERDAT      TEXT,
-    ZERZET      TEXT,
-    ZAENAM      TEXT,
-    ZAEDAT      TEXT,
-    ZTIME       TEXT
-);
+    # Driver Master
+    """CREATE TABLE IF NOT EXISTS ZHRT_DRIVER_MST (
+        DRIVER_ID   TEXT PRIMARY KEY,
+        DRIVER_NAME TEXT NOT NULL,
+        MOBILE_NO1  TEXT NOT NULL UNIQUE,
+        MOBILE_NO2  TEXT,
+        ADDRESS     TEXT,
+        DOB         TEXT,
+        DL_NO       TEXT,
+        VALID_UPTO  TEXT,
+        BEGDA       TEXT NOT NULL,
+        ENDDA       TEXT NOT NULL DEFAULT '9999-12-31',
+        ZERNAM      TEXT,
+        ZERDAT      TEXT,
+        ZERZET      TEXT,
+        ZAENAM      TEXT,
+        ZAEDAT      TEXT,
+        ZTIME       TEXT
+    )""",
 
--- ── Vehicle Master (ZHRT_VEHICLE_MST) ────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS ZHRT_VEHICLE_MST (
-    VEHICLE_NO          TEXT PRIMARY KEY,
-    VEHICLE_TYPE        TEXT,
-    VEHICLE_CATEGORY    TEXT,
-    MAKE                TEXT,
-    MODEL               TEXT,
-    CHASSIS_NO          TEXT,
-    ENGINE_NO           TEXT,
-    YEAR_REGN           TEXT,
-    DATE_PURCHASE       TEXT,
-    PO_NUMBER           TEXT,
-    COST_PURCHASE       REAL,
-    AGENCY_NAME         TEXT,
-    TAX                 TEXT,
-    INSURANCE           TEXT,
-    FITNESS             TEXT,
-    PERMIT              TEXT,
-    TAX_VALID_UPTO      TEXT,
-    INS_VALID_UPTO      TEXT,
-    FITNESS_VALID_UPTO  TEXT,
-    PERMIT_VALID_UPTO   TEXT,
-    SEATING_CAPACITY    INTEGER NOT NULL DEFAULT 40,
-    VEHICLE_FROM_DATE   TEXT NOT NULL,
-    VEHICLE_TO_DATE     TEXT NOT NULL DEFAULT '9999-12-31',
-    ACTIVE_FLAG         TEXT NOT NULL DEFAULT 'Y',
-    ZERNAM              TEXT,
-    ZERDAT              TEXT,
-    ZERZET              TEXT,
-    ZAENAM              TEXT,
-    ZAEDAT              TEXT,
-    ZTIME               TEXT
-);
+    # Vehicle Master
+    """CREATE TABLE IF NOT EXISTS ZHRT_VEHICLE_MST (
+        VEHICLE_NO         TEXT PRIMARY KEY,
+        VEHICLE_TYPE       TEXT,
+        VEHICLE_CATEGORY   TEXT,
+        MAKE               TEXT,
+        MODEL              TEXT,
+        CHASSIS_NO         TEXT,
+        ENGINE_NO          TEXT,
+        YEAR_REGN          TEXT,
+        DATE_PURCHASE      TEXT,
+        PO_NUMBER          TEXT,
+        COST_PURCHASE      DOUBLE PRECISION,
+        AGENCY_NAME        TEXT,
+        TAX                TEXT,
+        INSURANCE          TEXT,
+        FITNESS            TEXT,
+        PERMIT             TEXT,
+        TAX_VALID_UPTO     TEXT,
+        INS_VALID_UPTO     TEXT,
+        FITNESS_VALID_UPTO TEXT,
+        PERMIT_VALID_UPTO  TEXT,
+        SEATING_CAPACITY   INTEGER NOT NULL DEFAULT 40,
+        VEHICLE_FROM_DATE  TEXT NOT NULL,
+        VEHICLE_TO_DATE    TEXT NOT NULL DEFAULT '9999-12-31',
+        ACTIVE_FLAG        TEXT NOT NULL DEFAULT 'Y',
+        ZERNAM             TEXT,
+        ZERDAT             TEXT,
+        ZERZET             TEXT,
+        ZAENAM             TEXT,
+        ZAEDAT             TEXT,
+        ZTIME              TEXT
+    )""",
 
--- ── Driver-Vehicle Mapping (ZHRT_DRI_VEH_MAP) ────────────────────────────────
-CREATE TABLE IF NOT EXISTS ZHRT_DRI_VEH_MAP (
-    MAP_ID      TEXT PRIMARY KEY,
-    VEHICLE_TYPE TEXT NOT NULL,
-    VEHICLE_NO  TEXT NOT NULL,
-    DRIVER_ID   TEXT NOT NULL,
-    DRIVER_NAME TEXT,
-    MOBILE_NO1  TEXT,
-    BEGDA       TEXT NOT NULL,
-    ENDDA       TEXT NOT NULL DEFAULT '9999-12-31',
-    DATE_MAP    TEXT,
-    ZERNAM      TEXT,
-    ZERDAT      TEXT,
-    ZERZET      TEXT,
-    ZAENAM      TEXT,
-    ZAEDAT      TEXT,
-    ZTIME       TEXT,
-    UNIQUE (VEHICLE_NO, DRIVER_ID, BEGDA)
-);
+    # Driver-Vehicle Mapping
+    """CREATE TABLE IF NOT EXISTS ZHRT_DRI_VEH_MAP (
+        MAP_ID       TEXT PRIMARY KEY,
+        VEHICLE_TYPE TEXT NOT NULL,
+        VEHICLE_NO   TEXT NOT NULL,
+        DRIVER_ID    TEXT NOT NULL,
+        DRIVER_NAME  TEXT,
+        MOBILE_NO1   TEXT,
+        BEGDA        TEXT NOT NULL,
+        ENDDA        TEXT NOT NULL DEFAULT '9999-12-31',
+        DATE_MAP     TEXT,
+        ZERNAM       TEXT,
+        ZERDAT       TEXT,
+        ZERZET       TEXT,
+        ZAENAM       TEXT,
+        ZAEDAT       TEXT,
+        ZTIME        TEXT,
+        UNIQUE (VEHICLE_NO, DRIVER_ID, BEGDA)
+    )""",
 
--- ── Bus Route Map (ZHRT_ROUTE_MAP) ───────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS ZHRT_ROUTE_MAP (
-    SEQNR       TEXT NOT NULL,
-    SUB_SEQNR   TEXT NOT NULL,
-    ROUTE_FROM  TEXT NOT NULL,
-    PICK_UP_POINT TEXT NOT NULL,
-    BEGDA       TEXT NOT NULL DEFAULT '2024-01-01',
-    ENDDA       TEXT NOT NULL DEFAULT '9999-12-31',
-    ZERNAM      TEXT,
-    ZERDAT      TEXT,
-    PRIMARY KEY (SEQNR, SUB_SEQNR)
-);
+    # Bus Route Map
+    """CREATE TABLE IF NOT EXISTS ZHRT_ROUTE_MAP (
+        SEQNR        TEXT NOT NULL,
+        SUB_SEQNR    TEXT NOT NULL,
+        ROUTE_FROM   TEXT NOT NULL,
+        PICK_UP_POINT TEXT NOT NULL,
+        BEGDA        TEXT NOT NULL DEFAULT '2024-01-01',
+        ENDDA        TEXT NOT NULL DEFAULT '9999-12-31',
+        ZERNAM       TEXT,
+        ZERDAT       TEXT,
+        PRIMARY KEY (SEQNR, SUB_SEQNR)
+    )""",
 
--- ── Bus Request Main (ZHRT_BUS_REQ_MAIN) ─────────────────────────────────────
-CREATE TABLE IF NOT EXISTS ZHRT_BUS_REQ_MAIN (
-    REQID                       TEXT PRIMARY KEY,
-    PERNR                       TEXT NOT NULL,
-    PASS_TYPE                   TEXT NOT NULL,
-    APPLICATION_TYPE            TEXT NOT NULL,
-    REASON                      TEXT NOT NULL,
-    ROUTE_NO                    TEXT NOT NULL,
-    PICK_UP_POINT               TEXT NOT NULL,
-    NEAREST_STATION             TEXT NOT NULL,
-    DIST_PICKUP_RESIDENCE       REAL NOT NULL DEFAULT 0,
-    DIST_RESIDENCE_STATION      REAL NOT NULL DEFAULT 0,
-    EFFECTIVE_DATE              TEXT NOT NULL,
-    ATTACHMENT                  TEXT,
-    STATUS                      TEXT NOT NULL DEFAULT '0001',
-    PENDING_WITH                TEXT,
-    REQUEST_CREATED_BY          TEXT NOT NULL,
-    REQUEST_CREATION_DATE       TEXT NOT NULL,
-    CHANGED_ON                  TEXT,
-    CHANGED_BY                  TEXT,
-    ALLOTTED_VEHICLE_NO         TEXT,
-    ALLOTTED_DRIVER_ID          TEXT,
-    REMARKS                     TEXT
-);
+    # Bus Request Main
+    """CREATE TABLE IF NOT EXISTS ZHRT_BUS_REQ_MAIN (
+        REQID                   TEXT PRIMARY KEY,
+        PERNR                   TEXT NOT NULL,
+        PASS_TYPE               TEXT NOT NULL,
+        APPLICATION_TYPE        TEXT NOT NULL,
+        REASON                  TEXT NOT NULL,
+        ROUTE_NO                TEXT NOT NULL,
+        PICK_UP_POINT           TEXT NOT NULL,
+        NEAREST_STATION         TEXT NOT NULL,
+        DIST_PICKUP_RESIDENCE   DOUBLE PRECISION NOT NULL DEFAULT 0,
+        DIST_RESIDENCE_STATION  DOUBLE PRECISION NOT NULL DEFAULT 0,
+        EFFECTIVE_DATE          TEXT NOT NULL,
+        ATTACHMENT              TEXT,
+        STATUS                  TEXT NOT NULL DEFAULT '0001',
+        PENDING_WITH            TEXT,
+        REQUEST_CREATED_BY      TEXT NOT NULL,
+        REQUEST_CREATION_DATE   TEXT NOT NULL,
+        CHANGED_ON              TEXT,
+        CHANGED_BY              TEXT,
+        ALLOTTED_VEHICLE_NO     TEXT,
+        ALLOTTED_DRIVER_ID      TEXT,
+        REMARKS                 TEXT
+    )""",
 
--- ── Bus Request Log (ZHRT_BUS_REQ_LOGS) ──────────────────────────────────────
-CREATE TABLE IF NOT EXISTS ZHRT_BUS_REQ_LOGS (
-    LOG_ID                      TEXT PRIMARY KEY,
-    REQID                       TEXT NOT NULL,
-    SEQNR                       INTEGER NOT NULL,
-    ACTION_BY                   TEXT NOT NULL,
-    ACTION_ON                   TEXT NOT NULL,
-    CURR_REQUEST_STATUS         TEXT,
-    NEW_REQUEST_STATUS          TEXT NOT NULL,
-    PENDING_WITH                TEXT,
-    REQUEST_TYPE                TEXT,
-    APPLICATION_TYPE            TEXT,
-    ROUTE_NO                    TEXT,
-    PICK_UP_POINT               TEXT,
-    NEAREST_STATION             TEXT,
-    DIST_PICKUP_RESIDENCE       REAL,
-    DIST_RESIDENCE_STATION      REAL,
-    REMARKS                     TEXT
-);
-"""
+    # Bus Request Logs
+    """CREATE TABLE IF NOT EXISTS ZHRT_BUS_REQ_LOGS (
+        LOG_ID                 TEXT PRIMARY KEY,
+        REQID                  TEXT NOT NULL,
+        SEQNR                  INTEGER NOT NULL,
+        ACTION_BY              TEXT NOT NULL,
+        ACTION_ON              TEXT NOT NULL,
+        CURR_REQUEST_STATUS    TEXT,
+        NEW_REQUEST_STATUS     TEXT NOT NULL,
+        PENDING_WITH           TEXT,
+        REQUEST_TYPE           TEXT,
+        APPLICATION_TYPE       TEXT,
+        ROUTE_NO               TEXT,
+        PICK_UP_POINT          TEXT,
+        NEAREST_STATION        TEXT,
+        DIST_PICKUP_RESIDENCE  DOUBLE PRECISION,
+        DIST_RESIDENCE_STATION DOUBLE PRECISION,
+        REMARKS                TEXT
+    )""",
+]
+
+INDEX_STATEMENTS = [
+    "CREATE INDEX IF NOT EXISTS idx_req_pernr      ON ZHRT_BUS_REQ_MAIN (PERNR)",
+    "CREATE INDEX IF NOT EXISTS idx_req_status     ON ZHRT_BUS_REQ_MAIN (STATUS)",
+    "CREATE INDEX IF NOT EXISTS idx_req_created_by ON ZHRT_BUS_REQ_MAIN (REQUEST_CREATED_BY)",
+    "CREATE INDEX IF NOT EXISTS idx_req_vehicle    ON ZHRT_BUS_REQ_MAIN (ALLOTTED_VEHICLE_NO)",
+    "CREATE INDEX IF NOT EXISTS idx_emp_role       ON ZEMP_MASTER_TABLE (ROLE)",
+    "CREATE INDEX IF NOT EXISTS idx_emp_name       ON ZEMP_MASTER_TABLE (ENAME)",
+    "CREATE INDEX IF NOT EXISTS idx_veh_active     ON ZHRT_VEHICLE_MST  (ACTIVE_FLAG)",
+    "CREATE INDEX IF NOT EXISTS idx_map_vehicle    ON ZHRT_DRI_VEH_MAP  (VEHICLE_NO)",
+    "CREATE INDEX IF NOT EXISTS idx_map_driver     ON ZHRT_DRI_VEH_MAP  (DRIVER_ID)",
+    "CREATE INDEX IF NOT EXISTS idx_logs_reqid     ON ZHRT_BUS_REQ_LOGS (REQID)",
+]
 
 
-INDEXES = """
-CREATE INDEX IF NOT EXISTS idx_req_pernr        ON ZHRT_BUS_REQ_MAIN (PERNR);
-CREATE INDEX IF NOT EXISTS idx_req_status       ON ZHRT_BUS_REQ_MAIN (STATUS);
-CREATE INDEX IF NOT EXISTS idx_req_created_by   ON ZHRT_BUS_REQ_MAIN (REQUEST_CREATED_BY);
-CREATE INDEX IF NOT EXISTS idx_req_vehicle      ON ZHRT_BUS_REQ_MAIN (ALLOTTED_VEHICLE_NO);
-CREATE INDEX IF NOT EXISTS idx_emp_role         ON ZEMP_MASTER_TABLE  (ROLE);
-CREATE INDEX IF NOT EXISTS idx_emp_name         ON ZEMP_MASTER_TABLE  (ENAME);
-CREATE INDEX IF NOT EXISTS idx_veh_active       ON ZHRT_VEHICLE_MST   (ACTIVE_FLAG);
-CREATE INDEX IF NOT EXISTS idx_map_vehicle      ON ZHRT_DRI_VEH_MAP   (VEHICLE_NO);
-CREATE INDEX IF NOT EXISTS idx_map_driver       ON ZHRT_DRI_VEH_MAP   (DRIVER_ID);
-CREATE INDEX IF NOT EXISTS idx_logs_reqid       ON ZHRT_BUS_REQ_LOGS  (REQID);
-"""
-
-
+# ─────────────────────────────────────────────────────────────────────────────
+# Init
+# ─────────────────────────────────────────────────────────────────────────────
 def init_db():
-    """Create all tables, indexes and insert seed data if the DB is brand-new."""
+    """Create all tables, indexes and seed data if the DB is brand-new."""
     conn = get_connection()
-    conn.executescript(DDL)
-    conn.executescript(INDEXES)
-    conn.commit()
+    try:
+        for stmt in DDL_STATEMENTS:
+            conn.execute(stmt)
+        for stmt in INDEX_STATEMENTS:
+            conn.execute(stmt)
+        conn.commit()
 
-    # Migrations for columns added after initial release
-    for sql in [
-        "ALTER TABLE ZHRT_VEHICLE_MST ADD COLUMN SEATING_CAPACITY INTEGER NOT NULL DEFAULT 40",
-        "ALTER TABLE ZEMP_MASTER_TABLE ADD COLUMN EMAIL TEXT",
-        "ALTER TABLE ZEMP_MASTER_TABLE ADD COLUMN MOBILE_NO TEXT",
-        "ALTER TABLE ZEMP_MASTER_TABLE ADD COLUMN PROFILE_PHOTO TEXT",
-    ]:
-        try:
-            conn.execute(sql)
-            conn.commit()
-        except Exception:
-            pass  # Column already exists
+        row = conn.execute("SELECT COUNT(*) FROM ZEMP_MASTER_TABLE").fetchone()
+        if row[0] == 0:
+            _seed(conn)
 
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM ZEMP_MASTER_TABLE")
-    if cur.fetchone()[0] == 0:
-        _seed(conn)
-
-    conn.close()
+        logger.info("Database initialised successfully.")
+    except Exception as e:
+        conn.rollback()
+        logger.error("DB init failed: %s", e)
+        raise
+    finally:
+        conn.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Seed
 # ─────────────────────────────────────────────────────────────────────────────
-def _seed(conn: sqlite3.Connection):
+def _seed(conn: PgConnection):
     today = date.today().isoformat()
     now   = datetime.now().isoformat()
 
-    # Import here to avoid circular imports at module load time
     from core.security import hash_password
-    hashed = hash_password("pass123")
+    hashed = hash_password("Pass@123")
 
-    # Employees (passwords stored as bcrypt hashes)
     conn.executemany(
         "INSERT INTO ZEMP_MASTER_TABLE "
         "(PERNR,ENAME,DESIGNATION,DEPARTMENT,WERKS,PERSG,PERSK,ORGEH,STRAS,ROLE,PASSWORD,ZERDAT) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         [
             ("10000001","Rahul Sharma","Senior Engineer","IT Department","1001","1","01","50000001","12 MG Road, Pune","EMPLOYEE",hashed,today),
             ("10000002","Priya Verma","HR Manager","HR Department","1001","2","02","50000002","45 FC Road, Pune","APPROVER",hashed,today),
@@ -251,11 +322,10 @@ def _seed(conn: sqlite3.Connection):
         ]
     )
 
-    # Drivers
     conn.executemany(
         "INSERT INTO ZHRT_DRIVER_MST "
         "(DRIVER_ID,DRIVER_NAME,MOBILE_NO1,MOBILE_NO2,ADDRESS,DOB,DL_NO,VALID_UPTO,BEGDA,ENDDA,ZERNAM,ZERDAT) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         [
             ("DRV001","Suresh Kumar","9876543210","9876543211","14 Kharadi, Pune","1985-06-15","MH12AB1234","2026-12-31","2024-01-01","9999-12-31","SYSTEM",today),
             ("DRV002","Ramesh Singh","9988776655","9988776656","3 Viman Nagar, Pune","1980-03-22","MH14CD5678","2025-09-30","2024-01-01","9999-12-31","SYSTEM",today),
@@ -264,14 +334,13 @@ def _seed(conn: sqlite3.Connection):
         ]
     )
 
-    # Vehicles
     conn.executemany(
         "INSERT INTO ZHRT_VEHICLE_MST "
         "(VEHICLE_NO,VEHICLE_TYPE,MAKE,MODEL,CHASSIS_NO,ENGINE_NO,YEAR_REGN,DATE_PURCHASE,"
         "COST_PURCHASE,AGENCY_NAME,INSURANCE,FITNESS,PERMIT,TAX,"
         "TAX_VALID_UPTO,INS_VALID_UPTO,FITNESS_VALID_UPTO,PERMIT_VALID_UPTO,"
         "VEHICLE_FROM_DATE,VEHICLE_TO_DATE,ACTIVE_FLAG,SEATING_CAPACITY,ZERDAT) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         [
             ("MH12AB1001","BUS","TATA","Starbus Ultra 32","CHN001A","ENG001A","2022","2022-03-15",3500000.0,"Tata Motors Pune","INS-TT-001","FIT-001","PER-001","TAX-001","2026-03-14","2026-03-14","2026-03-14","2026-03-14","2022-04-01","9999-12-31","Y",32,today),
             ("MH12CD2002","BUS","ASHOK LEYLAND","Viking 40 Seater","CHN002B","ENG002B","2023","2023-01-10",4200000.0,"Leyland Dealers Pune","INS-AL-002","FIT-002","PER-002","TAX-002","2026-01-09","2026-01-09","2026-01-09","2026-01-09","2023-02-01","9999-12-31","Y",40,today),
@@ -280,9 +349,8 @@ def _seed(conn: sqlite3.Connection):
         ]
     )
 
-    # Routes
     conn.executemany(
-        "INSERT INTO ZHRT_ROUTE_MAP (SEQNR,SUB_SEQNR,ROUTE_FROM,PICK_UP_POINT,BEGDA,ENDDA) VALUES (?,?,?,?,?,?)",
+        "INSERT INTO ZHRT_ROUTE_MAP (SEQNR,SUB_SEQNR,ROUTE_FROM,PICK_UP_POINT,BEGDA,ENDDA) VALUES (%s,%s,%s,%s,%s,%s)",
         [
             ("01","001","Shivajinagar","Shivajinagar Bus Stand","2024-01-01","9999-12-31"),
             ("01","002","Shivajinagar","Deccan Gymkhana Corner","2024-01-01","9999-12-31"),
@@ -302,4 +370,4 @@ def _seed(conn: sqlite3.Connection):
     )
 
     conn.commit()
-    print("[DB] Seed data inserted successfully.")
+    logger.info("Seed data inserted successfully.")
