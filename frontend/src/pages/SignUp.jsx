@@ -118,8 +118,15 @@ export default function SignUp({ onBack }) {
   const validate = () => {
     const e = {};
     if (!form.ename.trim())       e.ename    = "Full name is required";
-    if (!form.password)           e.password = "Password is required";
-    if (form.password.length < 6) e.password = "Password must be at least 6 characters";
+    if (!form.password) {
+      e.password = "Password is required";
+    } else if (form.password.length < 8) {
+      e.password = "Must be at least 8 characters";
+    } else if (!/[A-Z]/.test(form.password)) {
+      e.password = "Must contain at least one uppercase letter";
+    } else if (!/[0-9]/.test(form.password)) {
+      e.password = "Must contain at least one number";
+    }
     if (form.password !== form.confirmPassword) e.confirmPassword = "Passwords do not match";
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -216,7 +223,7 @@ export default function SignUp({ onBack }) {
         </FormGroup>
 
         <FormGroup label="Password" required error={errors.password}>
-          <input type="password" value={form.password} onChange={set("password")} placeholder="Minimum 6 characters" />
+          <input type="password" value={form.password} onChange={set("password")} placeholder="Min 8 chars, 1 uppercase, 1 number" />
         </FormGroup>
 
         <FormGroup label="Confirm Password" required error={errors.confirmPassword}>

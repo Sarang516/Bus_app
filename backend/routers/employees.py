@@ -7,9 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from db.database import get_db
 from schemas.schemas import EmployeeProfileUpdate
-from core.security import hash_password, verify_password
-
-from core.security import get_current_user
+from core.security import hash_password, verify_password, get_current_user
 
 router = APIRouter(
     prefix="/employees",
@@ -103,8 +101,15 @@ def update_employee_profile(
             raise HTTPException(status_code=400, detail="Current password is required to set a new password.")
         if not verify_password(body.current_password, row["PASSWORD"]):
             raise HTTPException(status_code=400, detail="Current password is incorrect.")
-        if len(body.new_password) < 6:
-            raise HTTPException(status_code=400, detail="New password must be at least 6 characters.")
+        errors = []
+        if len(body.new_password) < 8:
+            errors.append("at least 8 characters")
+        if not any(c.isupper() for c in body.new_password):
+            errors.append("one uppercase letter")
+        if not any(c.isdigit() for c in body.new_password):
+            errors.append("one number")
+        if errors:
+            raise HTTPException(status_code=400, detail=f"Password must contain: {', '.join(errors)}.")
         updates["PASSWORD"] = hash_password(body.new_password)
 
     if not updates:

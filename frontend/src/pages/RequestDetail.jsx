@@ -20,62 +20,77 @@ const REASONS    = [
 // ─── Attachment helpers ───────────────────────────────────────────────────────
 function parseAttachment(value) {
   if (!value) return null;
-  try {
-    const obj = JSON.parse(value);
-    if (obj.name && obj.data) return obj;
-  } catch {}
-  return { name: value, data: null }; // plain text fallback
+  try { return JSON.parse(value); } catch {}
+  return { name: value }; // plain text fallback
 }
 
 function AttachmentView({ value }) {
   const att = parseAttachment(value);
   if (!att) return <span>—</span>;
-  if (att.data) {
+  // Support both old base64 format and new file_id format
+  const href = att.file_id ? api.getFileUrl(att.file_id) : att.data || null;
+  if (href) {
     return (
-      <a href={att.data} download={att.name} style={{ color: "var(--primary)", textDecoration: "underline" }}>
+      <a href={href} target="_blank" rel="noreferrer"
+        download={!att.file_id ? att.name : undefined}
+        style={{ color: "var(--primary)", textDecoration: "underline" }}>
         📎 {att.name}
       </a>
     );
   }
-  return <span>{att.name}</span>;
+  return <span>{att.name || "—"}</span>;
 }
 
 function AttachmentUpload({ value, onChange, required }) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState("");
+
   const att = parseAttachment(value);
-  const handleFile = (e) => {
+  const fileUrl = att?.file_id ? api.getFileUrl(att.file_id) : att?.data || null;
+
+  const handleFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) {
-      alert("File too large. Maximum allowed size is 2 MB.");
+      setUploadErr("File too large. Maximum allowed size is 2 MB.");
       e.target.value = "";
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      onChange(JSON.stringify({ name: file.name, data: reader.result }));
-    };
-    reader.readAsDataURL(file);
+    setUploadErr("");
+    setUploading(true);
+    try {
+      const result = await api.uploadFile(file);
+      onChange(JSON.stringify({ name: result.filename, file_id: result.file_id }));
+    } catch (err) {
+      setUploadErr(err.message || "Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
   };
+
   return (
     <div>
       <input
         type="file"
         accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif"
         onChange={handleFile}
+        disabled={uploading}
         style={{ display: "block", marginBottom: 6 }}
       />
-      {att && att.data && (
+      {uploading && <span style={{ fontSize: 12, color: "var(--primary)" }}>Uploading…</span>}
+      {uploadErr && <span style={{ fontSize: 12, color: "var(--danger)" }}>{uploadErr}</span>}
+      {att?.name && fileUrl && !uploading && (
         <span style={{ fontSize: 13, color: "var(--gray-500)" }}>
-          Current: <a href={att.data} download={att.name} style={{ color: "var(--primary)" }}>{att.name}</a>
+          ✅ <a href={fileUrl} target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>{att.name}</a>
           &nbsp;·&nbsp;
           <button type="button" className="btn btn-outline btn-sm" style={{ padding: "1px 8px", fontSize: 12 }}
             onClick={() => onChange("")}>Remove</button>
         </span>
       )}
-      {att && !att.data && (
+      {att?.name && !fileUrl && !uploading && (
         <span style={{ fontSize: 13, color: "var(--gray-500)" }}>Current: {att.name}</span>
       )}
-      {required && !value && (
+      {required && !att && !uploading && (
         <span style={{ fontSize: 12, color: "var(--danger)" }}>Required</span>
       )}
     </div>

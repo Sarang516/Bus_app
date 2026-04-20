@@ -17,6 +17,22 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 VALID_ROLES = {"EMPLOYEE", "APPROVER", "TRANSPORT_ADMIN"}
 
 
+def _validate_password(password: str):
+    """Enforce enterprise password policy."""
+    errors = []
+    if len(password) < 8:
+        errors.append("at least 8 characters")
+    if not any(c.isupper() for c in password):
+        errors.append("one uppercase letter")
+    if not any(c.isdigit() for c in password):
+        errors.append("one number")
+    if errors:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must contain: {', '.join(errors)}.",
+        )
+
+
 def _next_pernr(db: sqlite3.Connection) -> str:
     row = db.execute(
         "SELECT MAX(CAST(PERNR AS INTEGER)) FROM ZEMP_MASTER_TABLE"
@@ -76,6 +92,7 @@ def login(request: Request, payload: LoginRequest, db: sqlite3.Connection = Depe
 # ── Self-Register ─────────────────────────────────────────────────────────────
 @router.post("/register", status_code=201)
 def register(payload: RegisterRequest, db: sqlite3.Connection = Depends(get_db)):
+    _validate_password(payload.password)
     today = date.today().isoformat()
     pernr = _next_pernr(db)
 
@@ -127,6 +144,7 @@ def admin_add_employee(
             detail=f"Invalid role. Must be one of: {', '.join(VALID_ROLES)}"
         )
 
+    _validate_password(payload.password)
     today = date.today().isoformat()
     pernr = _next_pernr(db)
 

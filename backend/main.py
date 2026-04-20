@@ -5,6 +5,7 @@ Docs: http://localhost:8080/docs
 """
 import sys
 import os
+import uuid
 import logging
 import logging.handlers
 from pathlib import Path
@@ -48,7 +49,9 @@ logger = logging.getLogger("main")
 # ── JWT secret enforcement ────────────────────────────────────────────────────
 _DEFAULT_SECRET = "bus-app-dev-secret-change-in-production"
 _jwt_secret = os.environ.get("JWT_SECRET_KEY", _DEFAULT_SECRET)
-if _jwt_secret == _DEFAULT_SECRET:
+# Only warn in the main process (not in uvicorn reloader child processes)
+if _jwt_secret == _DEFAULT_SECRET and os.environ.get("_JWT_WARNED") != "1":
+    os.environ["_JWT_WARNED"] = "1"
     logger.warning(
         "⚠️  JWT_SECRET_KEY is using the default dev value! "
         "Set JWT_SECRET_KEY in your .env file before deploying to production."
@@ -99,12 +102,14 @@ async def global_exception_handler(request: Request, exc: Exception):
     detail = str(exc) if APP_ENV == "development" else "An internal error occurred."
     return JSONResponse(status_code=500, content={"detail": detail})
 
-# ── Request logging middleware ────────────────────────────────────────────────
+# ── Request logging middleware (with request ID for traceability) ─────────────
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    logger.info("→ %s %s", request.method, request.url.path)
+    req_id = str(uuid.uuid4())[:8]
+    logger.info("[%s] → %s %s", req_id, request.method, request.url.path)
     response = await call_next(request)
-    logger.info("← %s %s %s", request.method, request.url.path, response.status_code)
+    response.headers["X-Request-ID"] = req_id
+    logger.info("[%s] ← %s %s %d", req_id, request.method, request.url.path, response.status_code)
     return response
 
 # ── Routers ───────────────────────────────────────────────────────────────────
@@ -161,4 +166,18 @@ if __name__ == "__main__":
     logger.info("Starting server on port %d (env=%s)", PORT, APP_ENV)
 
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=(APP_ENV == "development"))
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=PORT,
+        reload=(APP_ENV == "development"),
+        # Only watch source directories — exclude env/ to prevent false reloads
+        reload_dirs=[
+            str(BASE_DIR / "routers"),
+            str(BASE_DIR / "core"),
+            str(BASE_DIR / "db"),
+            str(BASE_DIR / "schemas"),
+            str(BASE_DIR),
+        ] if APP_ENV == "development" else None,
+        reload_excludes=["env/*", "logs/*", "uploads/*", "*.db"] if APP_ENV == "development" else None,
+    )

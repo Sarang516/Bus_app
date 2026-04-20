@@ -220,27 +220,33 @@ function StepEmployeeDetails({ user, onBehalfOf, setOnBehalfOf, targetEmp, setTa
 
 // ─── Attachment upload helper ─────────────────────────────────────────────────
 function AttachmentUpload({ value, onChange, required }) {
-  let currentName = null;
-  let currentData = null;
-  try {
-    const obj = JSON.parse(value);
-    if (obj.name) { currentName = obj.name; currentData = obj.data; }
-  } catch { /* plain text or empty */ }
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState("");
 
-  const handleFile = (e) => {
+  let att = null;
+  try { att = value ? JSON.parse(value) : null; } catch { /* plain */ }
+
+  const handleFile = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) {
-      alert("File too large. Maximum allowed size is 2 MB.");
+      setUploadErr("File too large. Maximum allowed size is 2 MB.");
       e.target.value = "";
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      onChange(JSON.stringify({ name: file.name, data: reader.result }));
-    };
-    reader.readAsDataURL(file);
+    setUploadErr("");
+    setUploading(true);
+    try {
+      const result = await api.uploadFile(file);
+      onChange(JSON.stringify({ name: result.filename, file_id: result.file_id }));
+    } catch (err) {
+      setUploadErr(err.message || "Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
   };
+
+  const fileUrl = att?.file_id ? api.getFileUrl(att.file_id) : att?.data || null;
 
   return (
     <div>
@@ -248,9 +254,20 @@ function AttachmentUpload({ value, onChange, required }) {
         type="file"
         accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif"
         onChange={handleFile}
+        disabled={uploading}
         style={{ display: "block", marginBottom: 6 }}
       />
-      {required && !currentName && !value && (
+      {uploading && <span style={{ fontSize: 12, color: "var(--primary)" }}>Uploading…</span>}
+      {uploadErr && <span style={{ fontSize: 12, color: "var(--danger)" }}>{uploadErr}</span>}
+      {att?.name && fileUrl && !uploading && (
+        <span style={{ fontSize: 13, color: "var(--gray-500)" }}>
+          ✅ <a href={fileUrl} target="_blank" rel="noreferrer" style={{ color: "var(--primary)" }}>{att.name}</a>
+          &nbsp;·&nbsp;
+          <button type="button" className="btn btn-outline btn-sm" style={{ padding: "1px 8px", fontSize: 12 }}
+            onClick={() => { onChange(""); }}>Remove</button>
+        </span>
+      )}
+      {required && !att && !uploading && (
         <span style={{ fontSize: 12, color: "var(--danger)" }}>Required</span>
       )}
       {currentName && (

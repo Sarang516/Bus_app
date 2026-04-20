@@ -184,10 +184,25 @@ CREATE TABLE IF NOT EXISTS ZHRT_BUS_REQ_LOGS (
 """
 
 
+INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_req_pernr        ON ZHRT_BUS_REQ_MAIN (PERNR);
+CREATE INDEX IF NOT EXISTS idx_req_status       ON ZHRT_BUS_REQ_MAIN (STATUS);
+CREATE INDEX IF NOT EXISTS idx_req_created_by   ON ZHRT_BUS_REQ_MAIN (REQUEST_CREATED_BY);
+CREATE INDEX IF NOT EXISTS idx_req_vehicle      ON ZHRT_BUS_REQ_MAIN (ALLOTTED_VEHICLE_NO);
+CREATE INDEX IF NOT EXISTS idx_emp_role         ON ZEMP_MASTER_TABLE  (ROLE);
+CREATE INDEX IF NOT EXISTS idx_emp_name         ON ZEMP_MASTER_TABLE  (ENAME);
+CREATE INDEX IF NOT EXISTS idx_veh_active       ON ZHRT_VEHICLE_MST   (ACTIVE_FLAG);
+CREATE INDEX IF NOT EXISTS idx_map_vehicle      ON ZHRT_DRI_VEH_MAP   (VEHICLE_NO);
+CREATE INDEX IF NOT EXISTS idx_map_driver       ON ZHRT_DRI_VEH_MAP   (DRIVER_ID);
+CREATE INDEX IF NOT EXISTS idx_logs_reqid       ON ZHRT_BUS_REQ_LOGS  (REQID);
+"""
+
+
 def init_db():
-    """Create all tables and insert seed data if the DB is brand-new."""
+    """Create all tables, indexes and insert seed data if the DB is brand-new."""
     conn = get_connection()
     conn.executescript(DDL)
+    conn.executescript(INDEXES)
     conn.commit()
 
     # Migrations for columns added after initial release
