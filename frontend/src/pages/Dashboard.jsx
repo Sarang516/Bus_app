@@ -56,12 +56,12 @@ export default function Dashboard({ setPage }) {
     ] : []),
   ] : [];
 
-  const myCards = [
+  const myCards = myStats ? [
     { icon: "📝", label: "My Drafts",    value: myStats.my_draft,    color: "#374151", bg: "#f3f4f6", onClick: () => setPage("my-requests", "0001") },
     { icon: "📤", label: "My Submitted", value: myStats.my_pending,  color: "#b45309", bg: "#fef3c7", onClick: () => setPage("my-requests", "0002") },
     { icon: "✅", label: "My Approved",  value: myStats.my_approved, color: "#166534", bg: "#dcfce7", onClick: () => setPage("my-requests", "0003") },
     { icon: "❌", label: "My Rejected",  value: myStats.my_rejected, color: "#991b1b", bg: "#fee2e2", onClick: () => setPage("my-requests", "0004") },
-  ];
+  ] : [];
 
   return (
     <div className="page">
@@ -70,7 +70,7 @@ export default function Dashboard({ setPage }) {
       {/* Welcome */}
       <div className="welcome-banner">
         <div>
-          <h2 className="welcome-title">Welcome back, {user.name} 👋</h2>
+          <h2 className="welcome-title">Welcome back, {user.ename} 👋</h2>
           <p className="welcome-sub">{user.designation} · {user.department}</p>
         </div>
         {user.role === "EMPLOYEE" && (

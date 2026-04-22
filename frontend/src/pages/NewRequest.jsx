@@ -270,18 +270,6 @@ function AttachmentUpload({ value, onChange, required }) {
       {required && !att && !uploading && (
         <span style={{ fontSize: 12, color: "var(--danger)" }}>Required</span>
       )}
-      {currentName && (
-        <span style={{ fontSize: 13, color: "var(--gray-500)" }}>
-          Selected:&nbsp;
-          {currentData
-            ? <a href={currentData} download={currentName} style={{ color: "var(--primary)" }}>{currentName}</a>
-            : currentName}
-          &nbsp;·&nbsp;
-          <button type="button" className="btn btn-outline btn-sm"
-            style={{ padding: "1px 8px", fontSize: 12 }}
-            onClick={() => onChange("")}>Remove</button>
-        </span>
-      )}
     </div>
   );
 }

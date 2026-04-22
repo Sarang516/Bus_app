@@ -1,40 +1,100 @@
 """
-db/database.py  –  PostgreSQL connection + table creation + seed data
+core/db.py  –  Database connection + table creation + seed data
+
+  ┌─ TO SWITCH DATABASE ──────────────────────────────────────────────────┐
+  │  SQLite  (dev/testing, no setup needed):                              │
+  │    • Set USE_SQLITE = True  (line ~30)                                │
+  │                                                                       │
+  │  PostgreSQL  (production):                                            │
+  │    • Set USE_SQLITE = False  (line ~30)                               │
+  │    • Set DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD in .env  │
+  └───────────────────────────────────────────────────────────────────────┘
 """
 import os
+import sqlite3
 import logging
-from datetime import date, datetime
+from datetime import date
 
 import psycopg2
 import psycopg2.extras
-import psycopg2.extensions
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/bus_app"
-)
+# ── Toggle here: True = SQLite,  False = PostgreSQL ───────────────────────────
+USE_SQLITE = True
+# ─────────────────────────────────────────────────────────────────────────────
+
+DATABASE_FILE = os.environ.get("DATABASE_FILE", "bus_app.db")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Row wrapper — supports both row["KEY"] and row[0] access
-# ─────────────────────────────────────────────────────────────────────────────
+def _build_database_url():
+    if os.environ.get("DATABASE_URL"):
+        return os.environ["DATABASE_URL"]
+    host     = os.environ.get("DB_HOST",     "localhost")
+    port     = os.environ.get("DB_PORT",     "5432")
+    name     = os.environ.get("DB_NAME",     "bus_app")
+    user     = os.environ.get("DB_USER",     "postgres")
+    password = os.environ.get("DB_PASSWORD", "postgres")
+    return f"postgresql://{user}:{password}@{host}:{port}/{name}"
+
+
+# =============================================================================
+# SQLite  –  wrapper that accepts %s placeholders and CURRENT_DATE
+# =============================================================================
+class _SQLiteCursor:
+    def __init__(self, cur):
+        self._cur = cur
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+    def __iter__(self):
+        return iter(self._cur.fetchall())
+
+
+class SQLiteConnection:
+    def __init__(self, conn):
+        self._conn = conn
+        self._conn.row_factory = sqlite3.Row
+
+    @staticmethod
+    def _adapt(sql):
+        return sql.replace("%s", "?").replace("CURRENT_DATE", "date('now')")
+
+    def execute(self, sql, params=()):
+        cur = self._conn.execute(self._adapt(sql), params)
+        return _SQLiteCursor(cur)
+
+    def executemany(self, sql, data):
+        self._conn.executemany(self._adapt(sql), data)
+
+    def commit(self):
+        self._conn.commit()
+
+    def rollback(self):
+        self._conn.rollback()
+
+    def close(self):
+        self._conn.close()
+
+
+# =============================================================================
+# PostgreSQL  –  wrapper
+# =============================================================================
 class PgRow(dict):
-    """Dict subclass that also supports integer index access like sqlite3.Row."""
+    """Dict subclass that supports both row["KEY"] and row[0] like sqlite3.Row."""
     def __getitem__(self, key):
         if isinstance(key, int):
             return list(self.values())[key]
-        # PostgreSQL returns lowercase keys; try both cases
         try:
             return super().__getitem__(key)
         except KeyError:
-            return super().__getitem__(key.lower())
+            return super().__getitem__(key.upper())
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Cursor wrapper — converts RealDictRow → PgRow on fetch
-# ─────────────────────────────────────────────────────────────────────────────
 class PgCursor:
     def __init__(self, cursor):
         self._cur = cursor
@@ -50,59 +110,48 @@ class PgCursor:
         return (PgRow(r) for r in self._cur)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Connection wrapper — mimics sqlite3.Connection interface
-# ─────────────────────────────────────────────────────────────────────────────
 class PgConnection:
     """
-    Wraps a psycopg2 connection to expose the same interface as sqlite3.Connection
-    so all routers work without changes beyond ? → %s and date('now') → CURRENT_DATE.
+    Wraps a psycopg2 connection to expose the same interface as SQLiteConnection.
+    All views use %s placeholders and CURRENT_DATE — both work natively in PostgreSQL.
     """
-    def __init__(self, conn: psycopg2.extensions.connection):
+    def __init__(self, conn):
         self._conn = conn
 
-    def execute(self, sql: str, params=()) -> PgCursor:
+    def execute(self, sql, params=()):
         cur = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(sql, params if params else None)
         return PgCursor(cur)
 
-    def executemany(self, sql: str, data) -> None:
+    def executemany(self, sql, data):
         cur = self._conn.cursor()
         psycopg2.extras.execute_batch(cur, sql, data)
 
-    def commit(self) -> None:
+    def commit(self):
         self._conn.commit()
 
-    def rollback(self) -> None:
+    def rollback(self):
         self._conn.rollback()
 
-    def close(self) -> None:
+    def close(self):
         self._conn.close()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 # Connection factory
-# ─────────────────────────────────────────────────────────────────────────────
-def get_connection() -> PgConnection:
-    conn = psycopg2.connect(DATABASE_URL)
-    return PgConnection(conn)
+# =============================================================================
+def get_connection():
+    if USE_SQLITE:
+        conn = sqlite3.connect(DATABASE_FILE)
+        return SQLiteConnection(conn)
+    else:
+        conn = psycopg2.connect(_build_database_url())
+        return PgConnection(conn)
 
 
-def get_db():
-    """FastAPI dependency — yields a connection and closes it after the request."""
-    conn = get_connection()
-    try:
-        yield conn
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DDL  (PostgreSQL syntax)
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
+# DDL  (compatible with both SQLite and PostgreSQL)
+# =============================================================================
 DDL_STATEMENTS = [
     # Employee Master
     """CREATE TABLE IF NOT EXISTS ZEMP_MASTER_TABLE (
@@ -158,7 +207,7 @@ DDL_STATEMENTS = [
         YEAR_REGN          TEXT,
         DATE_PURCHASE      TEXT,
         PO_NUMBER          TEXT,
-        COST_PURCHASE      DOUBLE PRECISION,
+        COST_PURCHASE      REAL,
         AGENCY_NAME        TEXT,
         TAX                TEXT,
         INSURANCE          TEXT,
@@ -202,14 +251,14 @@ DDL_STATEMENTS = [
 
     # Bus Route Map
     """CREATE TABLE IF NOT EXISTS ZHRT_ROUTE_MAP (
-        SEQNR        TEXT NOT NULL,
-        SUB_SEQNR    TEXT NOT NULL,
-        ROUTE_FROM   TEXT NOT NULL,
+        SEQNR         TEXT NOT NULL,
+        SUB_SEQNR     TEXT NOT NULL,
+        ROUTE_FROM    TEXT NOT NULL,
         PICK_UP_POINT TEXT NOT NULL,
-        BEGDA        TEXT NOT NULL DEFAULT '2024-01-01',
-        ENDDA        TEXT NOT NULL DEFAULT '9999-12-31',
-        ZERNAM       TEXT,
-        ZERDAT       TEXT,
+        BEGDA         TEXT NOT NULL DEFAULT '2024-01-01',
+        ENDDA         TEXT NOT NULL DEFAULT '9999-12-31',
+        ZERNAM        TEXT,
+        ZERDAT        TEXT,
         PRIMARY KEY (SEQNR, SUB_SEQNR)
     )""",
 
@@ -223,8 +272,8 @@ DDL_STATEMENTS = [
         ROUTE_NO                TEXT NOT NULL,
         PICK_UP_POINT           TEXT NOT NULL,
         NEAREST_STATION         TEXT NOT NULL,
-        DIST_PICKUP_RESIDENCE   DOUBLE PRECISION NOT NULL DEFAULT 0,
-        DIST_RESIDENCE_STATION  DOUBLE PRECISION NOT NULL DEFAULT 0,
+        DIST_PICKUP_RESIDENCE   REAL NOT NULL DEFAULT 0,
+        DIST_RESIDENCE_STATION  REAL NOT NULL DEFAULT 0,
         EFFECTIVE_DATE          TEXT NOT NULL,
         ATTACHMENT              TEXT,
         STATUS                  TEXT NOT NULL DEFAULT '0001',
@@ -253,8 +302,8 @@ DDL_STATEMENTS = [
         ROUTE_NO               TEXT,
         PICK_UP_POINT          TEXT,
         NEAREST_STATION        TEXT,
-        DIST_PICKUP_RESIDENCE  DOUBLE PRECISION,
-        DIST_RESIDENCE_STATION DOUBLE PRECISION,
+        DIST_PICKUP_RESIDENCE  REAL,
+        DIST_RESIDENCE_STATION REAL,
         REMARKS                TEXT
     )""",
 ]
@@ -273,9 +322,9 @@ INDEX_STATEMENTS = [
 ]
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 # Init
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 def init_db():
     """Create all tables, indexes and seed data if the DB is brand-new."""
     conn = get_connection()
@@ -299,12 +348,11 @@ def init_db():
         conn.close()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 # Seed
-# ─────────────────────────────────────────────────────────────────────────────
-def _seed(conn: PgConnection):
+# =============================================================================
+def _seed(conn):
     today = date.today().isoformat()
-    now   = datetime.now().isoformat()
 
     from core.security import hash_password
     hashed = hash_password("Pass@123")

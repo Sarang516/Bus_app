@@ -2,7 +2,9 @@
 import { useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { Alert } from "../components/UI";
-import SignUp from "./SignUp";
+
+// SignUp removed — employees are sourced from SAP, no self-registration needed
+// import SignUp from "./SignUp";
 
 export default function Login() {
   const { login } = useAuth();
@@ -10,11 +12,6 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError]       = useState("");
   const [loading, setLoading]   = useState(false);
-  const [showSignUp, setShowSignUp] = useState(false);
-
-  if (showSignUp) {
-    return <SignUp onBack={() => setShowSignUp(false)} />;
-  }
 
   const handleLogin = async () => {
     if (!pernr.trim()) { setError("Employee Number is required."); return; }
@@ -68,17 +65,8 @@ export default function Login() {
           {loading ? "Signing in…" : "Sign In →"}
         </button>
 
-        <p style={{ textAlign: "center", marginTop: 16, fontSize: 13, color: "#6b7280" }}>
-          New employee?{" "}
-          <button
-            onClick={() => setShowSignUp(true)}
-            style={{
-              background: "none", border: "none", color: "#2563eb",
-              cursor: "pointer", fontWeight: 600, padding: 0,
-            }}
-          >
-            Create an account
-          </button>
+        <p style={{ textAlign: "center", marginTop: 16, fontSize: 12, color: "#9ca3af" }}>
+          First time? Enter your PERNR and set a new password to activate your account.
         </p>
       </div>
     </div>
