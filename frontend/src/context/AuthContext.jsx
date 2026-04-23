@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
+import { loginUser } from '../utils/api';
 
 const AuthContext = createContext(null);
 
@@ -29,56 +30,8 @@ export const AuthProvider = ({ children }) => {
   const login = async (pernr, password) => {
     setIsLoading(true); setError(null);
     try {
-      const response = await fetch('/api/auth/login', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ pernr, password }),
-      });
+      const data = await loginUser(pernr, password);
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Login failed. Check credentials.');
-      }
-
-      const data = await response.json();
-      const userData = {
-        pernr:         data.pernr,
-        ename:         data.ename,
-        role:          data.role,
-        designation:   data.designation,
-        department:    data.department,
-        address:       data.address       || null,
-        email:         data.email         || null,
-        mobile_no:     data.mobile_no     || null,
-        profile_photo: data.profile_photo || null,
-      };
-
-      _persistSession(userData, data.access_token);
-      return userData;
-    } catch (err) {
-      setError(err.message);
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // ── Self-Register ──────────────────────────────────────────────────────────
-  const register = async (formData) => {
-    setIsLoading(true); setError(null);
-    try {
-      const response = await fetch('/api/auth/register', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(formData),
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || 'Registration failed.');
-      }
-
-      const data = await response.json();
       const userData = {
         pernr:         data.pernr,
         ename:         data.ename,
@@ -122,7 +75,6 @@ export const AuthProvider = ({ children }) => {
     isLoading,
     error,
     login,
-    register,
     logout,
     updateUser,
     getUser: () => user,
